@@ -1,0 +1,32 @@
+{
+  "name": "encore-booking",
+  "version": "1.0.0",
+  "description": "Event seat booking backend: expiring holds, no double-booking under concurrency, idempotent checkout, refunds and check-in",
+  "main": "src/server.js",
+  "private": true,
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "db": "node scripts/dev-db.js",
+    "migrate": "node scripts/migrate.js",
+    "seed": "node scripts/seed.js",
+    "setup": "node scripts/migrate.js && node scripts/seed.js",
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node scripts/run-tests.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "express": "^5.1.0",
+    "express-rate-limit": "^7.5.0",
+    "helmet": "^8.0.0",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.13.1",
+    "swagger-ui-express": "^5.0.1",
+    "yaml": "^2.7.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "embedded-postgres": "^18.4.0-beta.17",
+    "supertest": "^7.0.0"
+  }
+}

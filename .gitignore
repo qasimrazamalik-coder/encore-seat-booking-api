@@ -1,0 +1,22 @@
+# dependencies
+node_modules/
+
+# local database created by `npm run db`
+.pgdata/
+
+# secrets and local config
+.env
+.env.*
+!.env.example
+
+# logs and test output
+*.log
+test-output.txt
+test-run.log
+coverage/
+
+# editors and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

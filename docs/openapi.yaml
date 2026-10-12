@@ -1,0 +1,179 @@
+openapi: 3.0.3
+info:
+  title: Encore Booking API
+  version: 1.0.0
+  description: |
+    Seat booking for live events, built so a seat can never be sold twice.
+
+    **Flow:** browse events -> `POST /holds` to claim seats for a few minutes -> `POST /orders` to pay ->
+    tickets with codes -> scanned at the door with `POST /events/{id}/check-in`.
+
+    **Holds** are all-or-nothing: if any requested seat is taken you get `409 SEATS_UNAVAILABLE`
+    listing which ones, and none are held. A hold expires after the event's `holdMinutes`.
+
+    **Checkout is idempotent.** Send an `Idempotency-Key` header with a unique value per payment attempt.
+    Repeating a request with the same key returns the original response (header `Idempotent-Replayed: true`)
+    without charging again. Reusing a key with a different body returns `422 IDEMPOTENCY_MISMATCH`.
+
+    Test cards: `4242 4242 4242 4242` succeeds, `4000 0000 0000 0002` is declined.
+
+    Seed accounts (password `password123`): organizer@encore.test, zainab@encore.test, ali@encore.test.
+servers:
+  - url: /api
+security:
+  - bearer: []
+components:
+  securitySchemes:
+    bearer: { type: http, scheme: bearer, bearerFormat: JWT }
+  parameters:
+    id: { name: id, in: path, required: true, schema: { type: integer } }
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string, example: SEATS_UNAVAILABLE }
+            message: { type: string }
+            details: {}
+    Event:
+      type: object
+      properties:
+        id: { type: integer }
+        title: { type: string }
+        venue: { type: string }
+        startsAt: { type: string, format: date-time }
+        status: { type: string, enum: [draft, on_sale, cancelled] }
+        maxPerOrder: { type: integer }
+        holdMinutes: { type: integer }
+        seatsTotal: { type: integer }
+        seatsLeft: { type: integer }
+        fromCents: { type: integer }
+    Seat:
+      type: object
+      properties:
+        id: { type: integer }
+        row: { type: string }
+        number: { type: integer }
+        tier: { type: string }
+        priceCents: { type: integer }
+        state: { type: string, enum: [available, taken, yours] }
+    Hold:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        eventId: { type: integer }
+        status: { type: string }
+        expiresAt: { type: string, format: date-time }
+        secondsLeft: { type: integer }
+        seats: { type: array, items: { type: object } }
+        totalCents: { type: integer }
+    Order:
+      type: object
+      properties:
+        reference: { type: string, example: ENC-7F3K2Q }
+        status: { type: string, enum: [paid, refunded] }
+        totalCents: { type: integer }
+        title: { type: string }
+        startsAt: { type: string, format: date-time }
+        tickets:
+          type: array
+          items: { type: object, properties: { code: { type: string }, seat: { type: string }, tier: { type: string }, valid: { type: boolean }, checkedInAt: { type: string, nullable: true } } }
+  responses:
+    Error: { description: Error, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+paths:
+  /auth/register:
+    post:
+      tags: [Auth]
+      security: []
+      summary: Create a customer account
+      requestBody: { content: { application/json: { schema: { type: object, properties: { name: { type: string }, email: { type: string }, password: { type: string } } } } } }
+      responses: { '201': { description: Created } }
+  /auth/login:
+    post:
+      tags: [Auth]
+      security: []
+      requestBody: { content: { application/json: { schema: { type: object, properties: { email: { type: string }, password: { type: string } } } } } }
+      responses: { '200': { description: 'Returns { token, user }' } }
+  /events:
+    get:
+      tags: [Events]
+      security: []
+      summary: Upcoming events on sale (organizers also see their drafts)
+      responses: { '200': { description: OK, content: { application/json: { schema: { type: array, items: { $ref: '#/components/schemas/Event' } } } } } }
+    post:
+      tags: [Events]
+      summary: Create an event with its seating plan (organizer). Starts as a draft.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, venue, startsAt, tiers]
+              properties:
+                title: { type: string }
+                venue: { type: string }
+                startsAt: { type: string, format: date-time }
+                maxPerOrder: { type: integer, default: 6 }
+                holdMinutes: { type: integer, default: 8 }
+                tiers:
+                  type: array
+                  items: { type: object, properties: { name: { type: string }, priceCents: { type: integer }, rows: { type: array, items: { type: string } }, seatsPerRow: { type: integer } } }
+      responses: { '201': { description: Created }, '403': { $ref: '#/components/responses/Error' } }
+  /events/{id}:
+    parameters: [{ $ref: '#/components/parameters/id' }]
+    get:
+      tags: [Events]
+      security: []
+      summary: Event with its seat map. Signed in, your own held seats show as "yours".
+      responses: { '200': { description: 'Event plus { tiers, seats: Seat[], myHold }' }, '404': { $ref: '#/components/responses/Error' } }
+  /events/{id}/publish:
+    parameters: [{ $ref: '#/components/parameters/id' }]
+    post: { tags: [Events], summary: Put a draft on sale (organizer), responses: { '200': { description: OK } } }
+  /events/{id}/cancel:
+    parameters: [{ $ref: '#/components/parameters/id' }]
+    post: { tags: [Events], summary: Cancel and refund every order (organizer), responses: { '200': { description: 'Returns { ordersRefunded }' } } }
+  /events/{id}/check-in:
+    parameters: [{ $ref: '#/components/parameters/id' }]
+    post:
+      tags: [Events]
+      summary: Scan a ticket at the door (organizer). A ticket works once.
+      requestBody: { content: { application/json: { schema: { type: object, properties: { code: { type: string } } } } } }
+      responses: { '200': { description: 'Returns { seat, holder }' }, '409': { $ref: '#/components/responses/Error' } }
+  /events/{id}/report:
+    parameters: [{ $ref: '#/components/parameters/id' }]
+    get: { tags: [Events], summary: 'Sales by tier, revenue, refunds, check-ins (organizer)', responses: { '200': { description: OK } } }
+  /holds:
+    post:
+      tags: [Booking]
+      summary: Hold seats, all or nothing. Replaces your previous hold for the same event.
+      requestBody: { content: { application/json: { schema: { type: object, properties: { eventId: { type: integer }, seatIds: { type: array, items: { type: integer } } } } } } }
+      responses:
+        '201': { description: Held, content: { application/json: { schema: { $ref: '#/components/schemas/Hold' } } } }
+        '409': { description: 'SEATS_UNAVAILABLE (details.seatIds), TICKET_LIMIT, EVENT_CANCELLED, SALES_CLOSED' }
+  /holds/{id}:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+    get: { tags: [Booking], responses: { '200': { description: OK } } }
+    delete: { tags: [Booking], summary: Let the seats go, responses: { '204': { description: Released } } }
+  /orders:
+    get: { tags: [Booking], summary: My orders and tickets, responses: { '200': { description: OK } } }
+    post:
+      tags: [Booking]
+      summary: Pay for a hold
+      parameters: [{ name: Idempotency-Key, in: header, required: true, schema: { type: string } }]
+      requestBody: { content: { application/json: { schema: { type: object, properties: { holdId: { type: string, format: uuid }, cardNumber: { type: string, example: '4242 4242 4242 4242' } } } } } }
+      responses:
+        '201': { description: Paid, content: { application/json: { schema: { $ref: '#/components/schemas/Order' } } } }
+        '402': { description: PAYMENT_DECLINED (seats stay held) }
+        '409': { description: HOLD_ALREADY_USED, EVENT_CANCELLED }
+        '410': { description: HOLD_EXPIRED }
+        '422': { description: IDEMPOTENCY_MISMATCH }
+  /orders/{reference}:
+    parameters: [{ name: reference, in: path, required: true, schema: { type: string } }]
+    get: { tags: [Booking], responses: { '200': { description: OK } } }
+  /orders/{reference}/refund:
+    parameters: [{ name: reference, in: path, required: true, schema: { type: string } }]
+    post: { tags: [Booking], summary: Refund up to 24 hours before the show; seats go back on sale, responses: { '200': { description: OK }, '409': { $ref: '#/components/responses/Error' } } }
+  /admin/sweep-holds:
+    post: { tags: [Events], summary: Run the expired-hold sweeper now (organizer; it also runs every 30 seconds), responses: { '200': { description: OK } } }

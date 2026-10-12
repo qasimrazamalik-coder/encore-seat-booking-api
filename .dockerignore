@@ -1,0 +1,10 @@
+node_modules
+.pgdata
+.git
+.github
+.env
+.env.*
+!.env.example
+*.log
+test-output.txt
+docs/screenshots
